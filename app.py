@@ -11,7 +11,7 @@ class CompactAI:
         c = conn.cursor()
         c.execute('CREATE TABLE IF NOT EXISTS snippets (line TEXT UNIQUE)')
         
-        if c.execute("SELECT COUNT(*) FROM snippets").fetchone()[0] == 0:
+        if c.execute("SELECT COUNT(*) FROM snippets").fetchone() == 0:
             urls = ["https://githubusercontent.com"]
             for u in urls:
                 try:
@@ -24,12 +24,9 @@ class CompactAI:
                 except: pass
             conn.commit()
             
-        # FIXED: Extracting string from database row tuple directly [row[0]]
         self.db_lines = [row[0] for row in c.execute("SELECT line FROM snippets").fetchall()]
         conn.close()
-        
-        if not self.db_lines: 
-            self.db_lines = ["def logic(): return {'status': 'active'}", "import os, math, sys"]
+        if not self.db_lines: self.db_lines = ["def logic(): return True", "import os, math, sys"]
         
         docs = [re.sub(r'[^\w\s]', '', l).lower().split() for l in self.db_lines]
         all_w = set(w for d in docs for w in d)
@@ -38,8 +35,7 @@ class CompactAI:
         
         for d in docs:
             for w in set(d): self.idf[w] = self.idf.get(w, 0) + 1
-        for w, v in self.idf.items(): 
-            self.idf[w] = math.log((1 + N) / (1 + v)) + 1
+        for w, v in self.idf.items(): self.idf[w] = math.log((1 + N) / (1 + v)) + 1
         
         for d in docs:
             v = [0.0] * len(self.vocab)
@@ -60,19 +56,16 @@ class CompactAI:
             dp = sum(qv[i] * dv[i] for i in range(len(self.vocab)))
             if dp > 0: scores.append((dp, self.db_lines[idx]))
             
-        # FIXED: Explicit sorting key targeting floats first
         scores.sort(key=lambda x: x[0], reverse=True)
-        
-        # FIXED: Extracting only text strings from score elements
         res = [x[1] for x in scores[:12]]
-        return "\n".join(res) if len(res) > 2 else f"# Context Dynamic Out:\\nclass Pipeline:\\n    def run(self): return '{p}'"
+        return "\n".join(res) if len(res) > 2 else f"# Matrix Synthesis Loop Output:\\nclass Pipeline:\\n    def run(self): return '{p}'"
 
 ai = CompactAI()
 
 @app.route('/compute', methods=['POST'])
 def compute():
     p = req.json.get('prompt', '') if req.json else ''
-    return jsonify({'code': f"# AI Matrix Core Output\\n# Tokens Generated\\n\\n" + ai.run_query(p)})
+    return jsonify({'code': f"# Advanced Custom Logic Matrix Output Engine\\n# Optimized Computational Tokens Generated\\n\\n" + ai.run_query(p)})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5001)))
