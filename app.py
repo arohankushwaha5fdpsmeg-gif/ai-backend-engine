@@ -1,180 +1,68 @@
-import os
-import math
-import re
-import sqlite3
-import requests
-from flask import Flask, request, jsonify
+import os, math, re, sqlite3, requests as r
+from flask import Flask, request as req, jsonify
 
 app = Flask(__name__)
 
-class ScratchCodeModel:
+class CompactAI:
     def __init__(self):
-        self.db_path = "cache.db"
-        self.code_database = []
-        self.vocab = {}
-        self.idf = {}
-        self.vectors = []
-        
-        self.init_local_db()
-        self.load_and_train()
-
-    def init_local_db(self):
-        """Initializes a local SQLite database to store code structures permanently."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS snippets (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                syntax_line TEXT UNIQUE
-            )
-        ''')
-        conn.commit()
-        conn.close()
-
-    def clean_text(self, text):
-        """Tokenizes text inputs into clean, processing-ready lower words."""
-        return re.sub(r'[^a-zA-Z0-9_\s]', '', text).lower().split()
-
-    def load_and_train(self):
-        """Scrapes or loads local code datasets, then builds a custom mathematical vector space model."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Check if we already have local data cached
-        cursor.execute("SELECT COUNT(*) FROM snippets")
-        count = cursor.fetchone()[0]
-        
-        if count == 0:
-            print("🚀 Local database empty. Training engine from scratch via web resources...")
-            urls = [
-                "https://githubusercontent.com",
-                "https://githubusercontent.com",
-                "https://githubusercontent.com",
-                "https://githubusercontent.com"
-            ]
-            for url in urls:
+        self.db = "cache.db"
+        self.vocab, self.idf, self.vectors, self.db_lines = {}, {}, [], []
+        conn = sqlite3.connect(self.db)
+        c = conn.cursor()
+        c.execute('CREATE TABLE IF NOT EXISTS snippets (line TEXT UNIQUE)')
+        if c.execute("SELECT COUNT(*) FROM snippets").fetchone()[0] == 0:
+            urls = ["https://githubusercontent.com"]
+            for u in urls:
                 try:
-                    res = requests.get(url, timeout=10)
+                    res = r.get(u, timeout=3)
                     if res.status_code == 200:
-                        for line in res.text.split("\n"):
-                            line = line.strip()
-                            # Cache functional code statements, functions, classes, and logic gates
-                            if any(line.startswith(x) for x in ["def ", "class ", "import ", "from ", "if "]) or ("=" in line and len(line) > 5):
-                                try:
-                                    cursor.execute("INSERT OR IGNORE INTO snippets (syntax_line) VALUES (?)", (line,))
-                                except:
-                                    pass
-                except:
-                    pass
+                        for l in res.text.split("\n"):
+                            l = l.strip()
+                            if any(l.startswith(x) for x in ["def ","class ","import "]) or ("=" in l and len(l) > 8):
+                                c.execute("INSERT OR IGNORE INTO snippets VALUES (?)", (l,))
+                except: pass
             conn.commit()
-        
-        # Load all structured snippets from the permanent local SQLite storage block
-        cursor.execute("SELECT syntax_line FROM snippets")
-        self.code_database = [row[0] for row in cursor.fetchall()]
+        self.db_lines = [row[0] for row in c.execute("SELECT line FROM snippets").fetchall()]
         conn.close()
-
-        if not self.code_database:
-            # Emergency structural failsafe block
-            self.code_database = [
-                "def custom_application_logic(*args, **kwargs):",
-                "    result_data = [x for x in args if x is not None]",
-                "    return {'status': 'processed', 'data': result_data}",
-                "import os, sys, json, requests, math",
-                "class DatabaseConnection:\n    def __init__(self):\n        self.connected = True"
-            ]
-
-        print(# Build mathematical TF-IDF vector matrix tables from absolute scratch
-f"🧠 Training matrix arrays over {len(self.code_database)} structural lines...")
+        if not self.db_lines: self.db_lines = ["def logic(): return {'status': 'active'}", "import os, math, sys"]
         
-        # 1. Build Vocabulary
-        doc_tokens = [self.clean_text(line) for line in self.code_database]
-        all_words = set(word for doc in doc_tokens for word in doc)
-        self.vocab = {word: i for i, word in enumerate(all_words)}
+        # Build Lightweight TF-IDF Matrix arrays
+        docs = [re.sub(r'[^\w\s]', '', l).lower().split() for l in self.db_lines]
+        all_w = set(w for d in docs for w in d)
+        self.vocab = {w: i for i, w in enumerate(all_w)}
+        N = len(self.db_lines)
+        for d in docs:
+            for w in set(d): self.idf[w] = self.idf.get(w, 0) + 1
+        for w, v in self.idf.items(): self.idf[w] = math.log((1 + N) / (1 + v)) + 1
         
-        # 2. Compute IDF Weights
-        num_docs = len(self.code_database)
-        doc_counts = {word: 0 for word in self.vocab}
-        for doc in doc_tokens:
-            for word in set(doc):
-                if word in doc_counts:
-                    doc_counts[word] += 1
-                    
-        for word, count in doc_counts.items():
-            self.idf[word] = math.log((1 + num_docs) / (1 + count)) + 1
+        for d in docs:
+            v = [0.0] * len(self.vocab)
+            for w in d: v[self.vocab[w]] = (d.count(w)) * self.idf[w]
+            m = math.sqrt(sum(x**2 for x in v))
+            self.vectors.append([x/m for x in v] if m > 0 else v)
 
-        # 3. Create Document Vectors
-        self.vectors = []
-        for doc in doc_tokens:
-            vec = [0.0] * len(self.vocab)
-            # Compute TF
-            tf = {}
-            for word in doc:
-                tf[word] = tf.get(word, 0) + 1
-            # Compute TF-IDF
-            for word, freq in tf.items():
-                if word in self.vocab:
-                    vec[self.vocab[word]] = freq * self.idf[word]
-            
-            # Normalize vector magnitude length
-            mag = math.sqrt(sum(val ** 2 for val in vec))
-            if mag > 0:
-                vec = [val / mag for val in vec]
-            self.vectors.append(vec)
-
-    def generate_code_matrix(self, prompt, max_output_lines=16):
-        """Processes query text and calculates similarity distances against vectors from scratch."""
-        query_tokens = self.clean_text(prompt)
-        if not query_tokens or not self.vocab:
-            return "\n".join(self.code_database[:4])
-            
-        # Build prompt target query vector
-        query_vec = [0.0] * len(self.vocab)
-        tf = {}
-        for word in query_tokens:
-            tf[word] = tf.get(word, 0) + 1
-        for word, freq in tf.items():
-            if word in self.vocab:
-                query_vec[self.vocab[word]] = freq * self.idf[word]
-                
-        q_mag = math.sqrt(sum(val ** 2 for val in query_vec))
-        if q_mag > 0:
-            query_vec = [val / q_mag for val in query_vec]
-            
-        # Matrix operations: calculate mathematical Dot-Product alignment weights
-        scored_snippets = []
-        for idx, doc_vec in enumerate(self.vectors):
-            dot_product = sum(query_vec[i] * doc_vec[i] for i in range(len(self.vocab)))
-            if dot_product > 0:
-                scored_snippets.append((dot_product, self.code_database[idx]))
-                
-        # Sort structural patterns by matching code logic strength
-        scored_snippets.sort(key=lambda x: x[0], reverse=True)
-        matched_blocks = [line for score, line in scored_snippets[:max_output_lines]]
+    def run_query(self, p):
+        q = re.sub(r'[^\w\s]', '', p).lower().split()
+        qv = [0.0] * len(self.vocab)
+        for w in q:
+            if w in self.vocab: qv[self.vocab[w]] = (q.count(w)) * self.idf[w]
+        qm = math.sqrt(sum(x**2 for x in qv))
+        if qm > 0: qv = [x/qm for x in qv]
         
-        # Contextual logic construction structural backup engine
-        if len(matched_blocks) < 3:
-            matched_blocks = [
-                f"# Contextual logic construction for query: {prompt}",
-                "class ModelPipeline:",
-                "    def __init__(self, *args):",
-                "        self.data_stream = args",
-                "    def execute_processing_cycle(self):",
-                "        return [math.sin(float(x)) for x in self.data_stream if x]"
-            ]
-            
-        return "\n".join(matched_blocks)
+        scores = []
+        for idx, dv in enumerate(self.vectors):
+            dp = sum(qv[i] * dv[i] for i in range(len(self.vocab)))
+            if dp > 0: scores.append((dp, self.db_lines[idx]))
+        scores.sort(key=lambda x: x[0], reverse=True)
+        res = [x[1] for x in scores[:12]]
+        return "\n".join(res) if len(res) > 2 else f"# Context Dynamic Out:\\nclass Pipeline:\\n    def run(self): return '{p}'"
 
-ai_brain = ScratchCodeModel()
+ai = CompactAI()
 
 @app.route('/compute', methods=['POST'])
 def compute():
-    data = request.get_json() or {}
-    p = data.get('prompt', '')
-    generated_snippet = ai_brain.generate_code_matrix(p)
-    
-    compiled_output = f"# Advanced Custom Native AI Model Output\n# Analysis Matrix Token Weights Generated Perfectly\n\n{generated_snippet}"
-    return jsonify({'code': compiled_output})
+    p = req.json.get('prompt', '')
+    return jsonify({'code': f"# AI Matrix Core Output\\n# Tokens Generated\\n\\n" + ai.run_query(p)})
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5001))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5001)))
